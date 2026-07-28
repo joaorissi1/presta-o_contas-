@@ -1,20 +1,18 @@
 "use client";
 import { useState } from "react";
-import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { PC_USERS, PC_PROJ } from "@/lib/data";
 import { brl, dBR } from "@/lib/format";
-import { podeAprovar, podePagar, podeEditar } from "@/lib/auth";
+import { podeEditar } from "@/lib/report";
 import ExpenseModal from "./ExpenseModal";
 import RejectModal from "./RejectModal";
 import PdfModal from "./PdfModal";
 
 export default function ReportForm({ store, relInicial, voltar }) {
-  const { operador, exigeOperador } = useAuth();
   const toast = useToast();
 
   const readonly = !podeEditar(relInicial);
-  const [funcionarioId, setFuncionarioId] = useState(relInicial ? relInicial.funcionarioId : (operador?.id || ""));
+  const [funcionarioId, setFuncionarioId] = useState(relInicial ? relInicial.funcionarioId : "");
   const [projeto, setProjeto] = useState(relInicial ? relInicial.projeto : "");
   const [periodoIni, setPeriodoIni] = useState(relInicial ? relInicial.periodoIni : "");
   const [periodoFim, setPeriodoFim] = useState(relInicial ? relInicial.periodoFim : "");
@@ -25,8 +23,8 @@ export default function ReportForm({ store, relInicial, voltar }) {
   const [rejModalOpen, setRejModalOpen] = useState(false);
   const [pdfModalOpen, setPdfModalOpen] = useState(false);
 
-  const podeAprovarEsta = relInicial && relInicial.status === "submetido" && podeAprovar(operador);
-  const podePagarEsta = relInicial && relInicial.status === "aprovado" && podePagar(operador);
+  const podeAprovarEsta = relInicial && relInicial.status === "submetido";
+  const podePagarEsta = relInicial && relInicial.status === "aprovado";
   const aprovEntry = relInicial && (relInicial.historico || []).slice().reverse().find((e) => e.acao === "Aprovou");
   const mostraBannerAprov = relInicial && ["aprovado", "pago"].includes(relInicial.status) && aprovEntry;
 
@@ -46,35 +44,50 @@ export default function ReportForm({ store, relInicial, voltar }) {
     setItens((prev) => prev.filter((_, i) => i !== ix));
   }
 
-  function handleSalvar(submeter) {
-    const op = exigeOperador(); if (!op) return;
+  async function handleSalvar(submeter) {
     if (!funcionarioId) return toast("Selecione o funcionário.", "err");
     if (!projeto) return toast("Selecione o projeto.", "err");
     if (!periodoIni || !periodoFim) return toast("Preencha o período.", "err");
     if (submeter && !itens.length) return toast("Adicione ao menos uma despesa antes de submeter.", "err");
     const func = PC_USERS.find((u) => u.id === funcionarioId);
-    store.salvar({
-      relExistente: relInicial, funcionarioId, funcionarioNome: func.nome,
-      projeto, periodoIni, periodoFim, itens, submeter, operadorNome: op.nome,
-    });
-    toast(submeter ? "Prestação submetida para aprovação!" : "Rascunho salvo.", "ok");
-    voltar();
+    try {
+      await store.salvar({
+        relExistente: relInicial, funcionarioId, funcionarioNome: func.nome,
+        projeto, periodoIni, periodoFim, itens, submeter,
+      });
+      toast(submeter ? "Prestação submetida para aprovação!" : "Rascunho salvo.", "ok");
+      voltar();
+    } catch (e) {
+      toast(e.message || "Erro ao salvar.", "err");
+    }
   }
-  function handleAprovar() {
-    store.aprovar(relInicial.id, operador?.nome);
-    toast("Prestação aprovada.", "ok");
-    voltar();
+  async function handleAprovar() {
+    try {
+      await store.aprovar(relInicial.id);
+      toast("Prestação aprovada.", "ok");
+      voltar();
+    } catch (e) {
+      toast(e.message || "Erro ao aprovar.", "err");
+    }
   }
-  function handlePagar() {
-    store.pagar(relInicial.id, operador?.nome);
-    toast("Prestação marcada como paga.", "ok");
-    voltar();
+  async function handlePagar() {
+    try {
+      await store.pagar(relInicial.id);
+      toast("Prestação marcada como paga.", "ok");
+      voltar();
+    } catch (e) {
+      toast(e.message || "Erro ao marcar como paga.", "err");
+    }
   }
-  function handleRejeitar(motivo) {
-    store.rejeitar(relInicial.id, motivo, operador?.nome);
-    setRejModalOpen(false);
-    toast("Prestação rejeitada.", "ok");
-    voltar();
+  async function handleRejeitar(motivo) {
+    try {
+      await store.rejeitar(relInicial.id, motivo);
+      setRejModalOpen(false);
+      toast("Prestação rejeitada.", "ok");
+      voltar();
+    } catch (e) {
+      toast(e.message || "Erro ao rejeitar.", "err");
+    }
   }
   function handlePdf() {
     if (!itens.length) { toast("Sem despesas para gerar o PDF.", "err"); return; }
@@ -113,7 +126,7 @@ export default function ReportForm({ store, relInicial, voltar }) {
         <div className="pc-bannerrej"><b>Rejeitada:</b> {relInicial.motivoRejeicao}</div>
       )}
       {mostraBannerAprov && (
-        <div className="pc-bannerok"><b>✓ Aprovada:</b> por {aprovEntry.autor} em {aprovEntry.em}</div>
+        <div className="pc-bannerok"><b>✓ Aprovada</b> em {aprovEntry.em}</div>
       )}
 
       <div className="pc-widget">
@@ -198,7 +211,7 @@ export default function ReportForm({ store, relInicial, voltar }) {
             {relInicial.historico.slice().reverse().map((e, i) => (
               <div className="pc-histitem" key={i}>
                 <span className="pc-histdata">{e.em}</span>
-                <span><span className="pc-histacao">{e.acao}</span> · {e.autor}{e.obs ? " — " + e.obs : ""}</span>
+                <span><span className="pc-histacao">{e.acao}</span>{e.obs ? " — " + e.obs : ""}</span>
               </div>
             ))}
           </div>

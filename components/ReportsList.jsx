@@ -1,13 +1,12 @@
 "use client";
 import { useMemo, useRef, useState } from "react";
-import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
-import { PC_USERS, PC_APROVADORES } from "@/lib/data";
+import { PC_USERS } from "@/lib/data";
 import { brl, dBR, norm, hojeISO } from "@/lib/format";
-import { totalRel } from "@/lib/auth";
+import { totalRel } from "@/lib/report";
+import RejectModal from "./RejectModal";
 
 export default function ReportsList({ store, abrirForm }) {
-  const { operador, abrirLogin, sair, exigeOperador } = useAuth();
   const toast = useToast();
   const importRef = useRef(null);
 
@@ -15,6 +14,7 @@ export default function ReportsList({ store, abrirForm }) {
   const [func, setFunc] = useState("");
   const [busca, setBusca] = useState("");
   const [selecionados, setSelecionados] = useState(new Set());
+  const [rejModalOpen, setRejModalOpen] = useState(false);
 
   const ano = String(new Date().getFullYear());
   const rels = store.db.relatorios;
@@ -35,7 +35,6 @@ export default function ReportsList({ store, abrirForm }) {
       .sort((a, b) => b.id - a.id);
   }, [rels, status, func, busca]);
 
-  const souAprovador = !!(operador && operador.id && PC_APROVADORES.includes(operador.id));
   const selecionaveisVisiveis = useMemo(() => filtrados.filter((r) => r.status === "submetido").map((r) => r.id), [filtrados]);
   const todosSelecionados = selecionaveisVisiveis.length > 0 && selecionaveisVisiveis.every((id) => selecionados.has(id));
 
@@ -49,17 +48,27 @@ export default function ReportsList({ store, abrirForm }) {
       return next;
     });
   }
-  function aprovarSelecionados() {
-    if (!operador || !PC_APROVADORES.includes(operador.id)) return;
+  async function aprovarSelecionados() {
     const ids = [...selecionados]; if (!ids.length) return;
     if (!confirm("Aprovar " + ids.length + " prestação(ões) selecionada(s)?")) return;
-    const n = store.aprovarLote(ids, operador.nome);
-    toast(n + " prestação(ões) aprovada(s).", "ok");
-    setSelecionados(new Set());
+    try {
+      const n = await store.aprovarLote(ids);
+      toast(n + " prestação(ões) aprovada(s).", "ok");
+      setSelecionados(new Set());
+    } catch (e) {
+      toast(e.message || "Erro ao aprovar em lote.", "err");
+    }
   }
-
-  function novaPrestacao() {
-    if (exigeOperador()) abrirForm(null);
+  async function recusarSelecionadosConfirmado(motivo) {
+    const ids = [...selecionados]; if (!ids.length) return;
+    try {
+      const n = await store.rejeitarLote(ids, motivo);
+      toast(n + " prestação(ões) recusada(s).", "ok");
+      setSelecionados(new Set());
+      setRejModalOpen(false);
+    } catch (e) {
+      toast(e.message || "Erro ao recusar em lote.", "err");
+    }
   }
 
   function exportar() {
@@ -75,15 +84,15 @@ export default function ReportsList({ store, abrirForm }) {
   function onImportFile(e) {
     const f = e.target.files[0]; if (!f) return;
     const rd = new FileReader();
-    rd.onload = () => {
+    rd.onload = async () => {
       try {
         const d = JSON.parse(rd.result);
-        if (!d || !Array.isArray(d.relatorios)) throw 0;
+        if (!d || !Array.isArray(d.relatorios)) throw new Error("Arquivo inválido.");
         if (!confirm("Importar " + d.relatorios.length + " relatórios? Os dados atuais serão substituídos.")) return;
-        store.importarDB(d);
+        await store.importarDB(d);
         toast("Backup importado.", "ok");
-      } catch {
-        toast("Arquivo inválido.", "err");
+      } catch (err) {
+        toast(err.message || "Arquivo inválido.", "err");
       }
     };
     rd.readAsText(f);
@@ -98,20 +107,10 @@ export default function ReportsList({ store, abrirForm }) {
           <div className="pc-sub">Reembolsos · Notas de débito · Fluxo de aprovação</div>
         </div>
         <div className="pc-acts">
-          <span className="pc-oper">
-            {operador ? (
-              <>
-                Operador: <b>{operador.nome}</b>{" "}
-                <button className="pc-btn pc-btn-o pc-btn-min" onClick={sair}>Sair</button>
-              </>
-            ) : (
-              <button className="pc-btn pc-btn-o pc-btn-min" onClick={abrirLogin}>Entrar</button>
-            )}
-          </span>
           <button className="pc-btn pc-btn-o" onClick={exportar}>⬇ Exportar</button>
           <button className="pc-btn pc-btn-o" onClick={() => importRef.current?.click()}>⬆ Importar</button>
           <input ref={importRef} type="file" accept="application/json" hidden onChange={onImportFile} />
-          <button className="pc-btn pc-btn-g" onClick={novaPrestacao}>+ Nova Prestação</button>
+          <button className="pc-btn pc-btn-g" onClick={() => abrirForm(null)}>+ Nova Prestação</button>
         </div>
       </div>
 
@@ -125,10 +124,15 @@ export default function ReportsList({ store, abrirForm }) {
       <div className="pc-widget">
         <div className="pc-whead">
           <span>Relatórios</span>
-          {souAprovador && selecionaveisVisiveis.length > 0 && (
-            <button className="pc-btn pc-btn-v pc-btn-min" disabled={selecionados.size === 0} onClick={aprovarSelecionados}>
-              Aprovar Selecionados ({selecionados.size})
-            </button>
+          {selecionaveisVisiveis.length > 0 && (
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="pc-btn pc-btn-d pc-btn-min" disabled={selecionados.size === 0} onClick={() => setRejModalOpen(true)}>
+                Recusar Selecionados ({selecionados.size})
+              </button>
+              <button className="pc-btn pc-btn-v pc-btn-min" disabled={selecionados.size === 0} onClick={aprovarSelecionados}>
+                Aprovar Selecionados ({selecionados.size})
+              </button>
+            </div>
           )}
         </div>
         <div className="pc-filtros">
@@ -153,7 +157,7 @@ export default function ReportsList({ store, abrirForm }) {
             <thead>
               <tr>
                 <th style={{ width: 26 }}>
-                  {souAprovador && selecionaveisVisiveis.length > 0 && (
+                  {selecionaveisVisiveis.length > 0 && (
                     <input type="checkbox" checked={todosSelecionados} onChange={(e) => toggleSelAll(e.target.checked)} />
                   )}
                 </th>
@@ -167,7 +171,7 @@ export default function ReportsList({ store, abrirForm }) {
                 filtrados.map((r) => (
                   <tr key={r.id} className="pc-click" onClick={() => abrirForm(r)}>
                     <td onClick={(e) => e.stopPropagation()}>
-                      {souAprovador && r.status === "submetido" && (
+                      {r.status === "submetido" && (
                         <input type="checkbox" checked={selecionados.has(r.id)} onChange={(e) => toggleSel(r.id, e.target.checked)} />
                       )}
                     </td>
@@ -189,6 +193,13 @@ export default function ReportsList({ store, abrirForm }) {
           </table>
         </div>
       </div>
+
+      <RejectModal
+        open={rejModalOpen}
+        count={selecionados.size}
+        onCancel={() => setRejModalOpen(false)}
+        onConfirm={recusarSelecionadosConfirmado}
+      />
     </div>
   );
 }

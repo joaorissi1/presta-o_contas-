@@ -1,101 +1,85 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import { loadDB, saveDB } from "@/lib/storage";
-import { pushHist } from "@/lib/auth";
 import { useToast } from "@/context/ToastContext";
 
-/* Store dos relatórios de Prestação de Contas: mantém `db` em estado
-   React e persiste no localStorage a cada alteração. Todas as
-   mutações são imutáveis (map/filter/spread), nunca tocam o objeto
-   de estado anterior diretamente. */
+const API = "/api/relatorios";
+
+async function chamarApi(url, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Erro ao comunicar com o servidor.");
+  return data;
+}
+
+/* Store dos relatórios de Prestação de Contas: os dados moram no
+   Supabase (via rotas de API do Next.js). Este hook busca a lista ao
+   montar, recarrega após cada mutação, e também ao voltar o foco pra
+   aba — assim quem está com a tela aberta vê o que outra pessoa fez. */
 export function useReportsStore() {
   const toast = useToast();
-  const [db, setDb] = useState({ seq: 0, relatorios: [] });
+  const [relatorios, setRelatorios] = useState([]);
   const [hydrated, setHydrated] = useState(false);
 
-  useEffect(() => {
-    setDb(loadDB());
-    setHydrated(true);
-  }, []);
-
-  const commit = useCallback((next) => {
+  const recarregar = useCallback(async () => {
     try {
-      saveDB(next);
+      const res = await fetch(API, { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Erro ao carregar.");
+      setRelatorios(data.relatorios || []);
     } catch (e) {
-      toast("Armazenamento cheio — exporte um backup e remova anexos grandes.", "err");
+      toast("Não foi possível carregar os dados do servidor.", "err");
+    } finally {
+      setHydrated(true);
     }
-    setDb(next);
   }, [toast]);
 
-  const salvar = useCallback(({ relExistente, funcionarioId, funcionarioNome, projeto, periodoIni, periodoFim, itens, submeter, operadorNome }) => {
-    let seq = db.seq;
-    let rel;
-    let relatorios;
-    if (relExistente) {
-      rel = { ...relExistente, historico: [...(relExistente.historico || [])] };
-      relatorios = db.relatorios.map((r) => (r.id === rel.id ? rel : r));
-    } else {
-      seq = db.seq + 1;
-      rel = {
-        id: Date.now(),
-        codigo: "PC-" + new Date().getFullYear() + "-" + String(seq).padStart(4, "0"),
-        status: "rascunho",
-        historico: [],
-      };
-      pushHist(rel, "Criou", "", operadorNome);
-      relatorios = [...db.relatorios, rel];
-    }
-    Object.assign(rel, {
-      funcionarioId, funcionarioNome, lancadoPor: operadorNome,
-      projeto, periodoIni, periodoFim,
-      itens: JSON.parse(JSON.stringify(itens)),
+  useEffect(() => { recarregar(); }, [recarregar]);
+
+  useEffect(() => {
+    function onFocus() { recarregar(); }
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [recarregar]);
+
+  const salvar = useCallback(async ({ relExistente, funcionarioId, funcionarioNome, projeto, periodoIni, periodoFim, itens, submeter }) => {
+    const rel = await chamarApi(API, {
+      id: relExistente?.id ?? null,
+      funcionarioId, funcionarioNome, projeto, periodoIni, periodoFim, itens, submeter,
     });
-    if (submeter) {
-      rel.status = "submetido"; rel.motivoRejeicao = "";
-      pushHist(rel, "Submeteu", "", operadorNome);
-    } else if (relExistente) {
-      pushHist(rel, "Editou", "", operadorNome);
-    }
-    commit({ seq, relatorios });
+    await recarregar();
     return rel;
-  }, [db, commit]);
+  }, [recarregar]);
 
-  const mudarStatus = useCallback((relId, novoStatus, acao, obs, operadorNome) => {
-    let relAtualizado = null;
-    const relatorios = db.relatorios.map((r) => {
-      if (r.id !== relId) return r;
-      const copia = { ...r, historico: [...(r.historico || [])] };
-      copia.status = novoStatus;
-      if (novoStatus === "rejeitado") copia.motivoRejeicao = obs;
-      pushHist(copia, acao, obs, operadorNome);
-      relAtualizado = copia;
-      return copia;
-    });
-    commit({ seq: db.seq, relatorios });
-    return relAtualizado;
-  }, [db, commit]);
+  const mudarStatus = useCallback(async (relId, action, motivo) => {
+    const rel = await chamarApi(API + "/" + relId + "/status", { action, motivo });
+    await recarregar();
+    return rel;
+  }, [recarregar]);
 
-  const aprovar = useCallback((relId, operadorNome) => mudarStatus(relId, "aprovado", "Aprovou", "", operadorNome), [mudarStatus]);
-  const pagar = useCallback((relId, operadorNome) => mudarStatus(relId, "pago", "Marcou Pago", "", operadorNome), [mudarStatus]);
-  const rejeitar = useCallback((relId, motivo, operadorNome) => mudarStatus(relId, "rejeitado", "Rejeitou", motivo, operadorNome), [mudarStatus]);
+  const aprovar = useCallback((relId) => mudarStatus(relId, "aprovar"), [mudarStatus]);
+  const pagar = useCallback((relId) => mudarStatus(relId, "pagar"), [mudarStatus]);
+  const rejeitar = useCallback((relId, motivo) => mudarStatus(relId, "rejeitar", motivo), [mudarStatus]);
 
-  const aprovarLote = useCallback((ids, operadorNome) => {
-    let count = 0;
-    const relatorios = db.relatorios.map((r) => {
-      if (!ids.includes(r.id) || r.status !== "submetido") return r;
-      count++;
-      const copia = { ...r, historico: [...(r.historico || [])] };
-      copia.status = "aprovado";
-      pushHist(copia, "Aprovou", "", operadorNome);
-      return copia;
-    });
-    commit({ seq: db.seq, relatorios });
+  const aprovarLote = useCallback(async (ids) => {
+    const { count } = await chamarApi(API + "/aprovar-lote", { ids });
+    await recarregar();
     return count;
-  }, [db, commit]);
+  }, [recarregar]);
 
-  const importarDB = useCallback((novoDb) => {
-    commit({ seq: novoDb.seq || 0, relatorios: novoDb.relatorios });
-  }, [commit]);
+  const rejeitarLote = useCallback(async (ids, motivo) => {
+    const { count } = await chamarApi(API + "/rejeitar-lote", { ids, motivo });
+    await recarregar();
+    return count;
+  }, [recarregar]);
 
-  return { db, hydrated, salvar, aprovar, pagar, rejeitar, aprovarLote, importarDB };
+  const importarDB = useCallback(async (novoDb) => {
+    await chamarApi(API + "/importar", { relatorios: novoDb.relatorios || [] });
+    await recarregar();
+  }, [recarregar]);
+
+  return { db: { relatorios }, hydrated, salvar, aprovar, pagar, rejeitar, aprovarLote, rejeitarLote, importarDB };
 }

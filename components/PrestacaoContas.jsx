@@ -1,7 +1,6 @@
 "use client";
 import { useState } from "react";
 import { ToastProvider } from "@/context/ToastContext";
-import { AuthProvider } from "@/context/AuthContext";
 import { useReportsStore } from "@/hooks/useReportsStore";
 import ReportsList from "./ReportsList";
 import ReportForm from "./ReportForm";
@@ -9,9 +8,7 @@ import ReportForm from "./ReportForm";
 export default function PrestacaoContas() {
   return (
     <ToastProvider>
-      <AuthProvider>
-        <PrestacaoContasInner />
-      </AuthProvider>
+      <PrestacaoContasInner />
     </ToastProvider>
   );
 }

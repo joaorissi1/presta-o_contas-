@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { useToast } from "@/context/ToastContext";
 
-export default function RejectModal({ open, onCancel, onConfirm }) {
+export default function RejectModal({ open, onCancel, onConfirm, count }) {
   const toast = useToast();
   const [motivo, setMotivo] = useState("");
 
@@ -21,7 +21,7 @@ export default function RejectModal({ open, onCancel, onConfirm }) {
   return (
     <div className="pc-modalbg">
       <div className="pc-modal" style={{ maxWidth: 460 }}>
-        <h2>Rejeitar prestação</h2>
+        <h2>{count > 1 ? `Rejeitar ${count} prestações` : "Rejeitar prestação"}</h2>
         <div className="pc-field">
           <label>Motivo da rejeição *</label>
           <textarea rows={3} style={{ resize: "vertical" }} value={motivo} onChange={(e) => setMotivo(e.target.value)} />
